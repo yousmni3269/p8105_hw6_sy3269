@@ -1,0 +1,141 @@
+---
+title: "P8105_HW6_sy3269"
+author: "Soomin You"
+date: "2024-11-17"
+output: html_document
+---
+
+
+```{r setup}
+library(tidyverse)
+library(readr)
+```
+
+
+## Problem 1
+
+
+```{r weather_data_import}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response and tmin as the predictor, and are interested in the distribution of two quantities estimated from these data:
+
+Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of these two quantities. Plot the distribution of your estimates, and describe these in words. Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for 𝑟̂2 and log(𝛽̂0∗𝛽̂1). Note: broom::glance() is helpful for extracting 𝑟̂2 from a fitted regression, and broom::tidy() (with some additional wrangling) should help in computing log(𝛽̂0∗𝛽̂1).
+
+```{r}
+boot_samp = 
+```
+
+
+
+## Problem 2 
+
+The homicides data gathered by The *Washington Post* in 50 large U.S. cities was imported and cleaned. An additional variable `city_state` was added to show both city and state information in one vector, and a binary variable called `solved` was added to show cases closed with arrest as 1 and the others (closed without arrest and open cases) as 0. 
+
+Some cities that do not report victim race, such as Dallas, TX; Phoenix, AZ; and Kansas City, MO were omitted, and a data entry with incorrect information (e.g. Tulsa, AL) was also omitted. Data with unknown victim_age were also omitted for analysis. The analysis will be limited to the victims whose race is white or black. 
+
+```{r homicide_data_import}
+homicide_data = read_csv("./data/homicide-data.csv", na = c("NA", "", ".")) |>
+  janitor::clean_names() |>
+  mutate(city_state = str_c(city, state, sep = ", "), 
+         solved = ifelse(disposition == "Closed by arrest", 1, 0)
+  ) |>
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"), 
+         victim_race %in% c("White", "Black"), 
+         victim_age != "Unknown") |>
+  mutate(victim_age = as.numeric(victim_age))
+```
+
+
+For the city of Baltimore, MD, the glm function was used to fit a logistic regression with `solved` as the outcome and `victim_age`, `victim_sex` and `victim_race` are predictors. 
+
+```{r baltimore_data}
+baltimore_model = 
+  homicide_data |>
+  filter(city_state == "Baltimore, MD") |>
+  glm(solved ~ victim_age + victim_sex + victim_race, data = _) |>
+  broom::tidy()
+
+
+or_baltimore_male = pull(estimate)
+```
+
+obtain the estimate and confidence interval of the adjusted odds ratio for solving homicides comparing male victims to female victims keeping all other variables fixed.
+
+
+
+
+Now run glm for each of the cities in your dataset, and extract the adjusted odds ratio (and CI) for solving homicides comparing male victims to female victims. Do this within a “tidy” pipeline, making use of purrr::map, list columns, and unnest as necessary to create a dataframe with estimated ORs and CIs for each city.
+
+```{r each_city_data}
+city_model = function(name) { 
+  
+  city_data = 
+    homicide_data |>
+    filter(city_state == name) 
+    
+  glm(solved ~ victim_age + victim_sex + victim_race, data = city_data) |>
+    broom::tidy()
+}
+
+
+unique_city_state = 
+  homicide_data |>
+  distinct(city_state) |>
+  pull(city_state)
+
+
+city_simulation = 
+  tibble(
+    unique_name = unique_city_state
+  ) |>
+  mutate(data = map(unique_name, city_model)) |>
+  unnest(data) 
+
+
+```
+
+
+
+
+## Problem 3 
+
+```{r birthweight_data_import}
+birthweight_data = read_csv("./data/birthweight.csv", na = c("NA", "", ".")) |>
+  janitor::clean_names() 
+```
+
+
+
+Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
+
+
+```{r}
+birthweight_data |>
+  lm(bwt ~ wtgain + delwt, data = _)
+```
+
+Compare your model to two others:
+
+One using length at birth and gestational age as predictors (main effects only)
+One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
+
+Note that although we expect your model to be reasonable, model building itself is not a main idea of the course and we don’t necessarily expect your model to be “optimal”.
+
+
+
+
+
+
