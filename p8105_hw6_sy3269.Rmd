@@ -225,7 +225,6 @@ birthweight_df = read_csv("./data/birthweight.csv",
 A regression model for the birthweight is first made using some of the 
 baby-specific factors and maternal factors that are explicitly related to weight. 
 The predictors are as follows: 
-* babysex
 * bhead: baby’s head circumference at birth (centimeters)
 * blength: baby’s length at birth (centimeteres)
 * gaweeks: gestational age in weeks
@@ -238,8 +237,7 @@ The predictors are as follows:
 
 ```{r model}
 bwt_model_fit = 
-  lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
-       delwt + mheight + ppbmi + ppwt + wtgain, 
+  lm(bwt ~  bhead + blength + gaweeks + delwt + mheight + ppbmi + ppwt + wtgain, 
      data = birthweight_df) 
 
 bwt_model_fit |>
@@ -261,8 +259,7 @@ used as a predictor.
 
 ```{r}
 bwt_model_new = 
-  lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
-       mheight + ppbmi + wtgain, 
+  lm(bwt ~ bhead + blength + gaweeks + mheight + ppbmi + wtgain, 
      data = birthweight_df) 
 
 bwt_model_new |>
@@ -279,67 +276,10 @@ number, there seems to be no multicolinearity issue. However, residual vs levera
 plot is worth noting as it indicates an influential point on the right upper corner. 
 
 
-To further improve the model, additional predictors that are mainly maternal
-will be added. The additional predictors are listed below. 
-* menarche: mother’s age at menarche (years)
-* momage: mother’s age at delivery (years)
-* mrace: mother's race 
-* smoken: average number of cigarettes smoked per day during pregnancy
-
+To further improve the model, cross validation is performed. 
+The linear model above is compared with a smooth model. 
 
 ```{r}
-bwt_model_add = 
-  lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
-       mheight + ppbmi + wtgain + 
-       menarche + momage + factor(mrace) + smoken,
-     data = birthweight_df) 
-
-bwt_model_add |>
-  summary() 
-
-alias(bwt_model_add)
-plot(bwt_model_add)
-```
-
-The adjusted R squared value is slightly improved to 0.72. There is no alias 
-and the plot seems to be indicate more ideal linear relationship than the 
-previous model. 
-
-To finalize the model, 
-
-
-The `bwt_model_add` is then plotted to see 
-
-```{r}
-birthweight_df |>
-  ggplot(aes(x = bhead + blength + gaweeks + 
-       mheight + ppbmi + wtgain + 
-       menarche + momage +smoken, 
-       y = bwt)) +
-  geom_point()
-```
-
-
-Then, `add_predictions` and `add_residuals` are used to find the residuals and 
-predictions of the finalized model. These values are plotted against each other. 
-
-```{r plotting_model}
-birthweight_df |>
-  modelr::add_predictions(bwt_model_add) |>
-  modelr::add_residuals(bwt_model_add) |>
-  ggplot(aes(x = pred, y = resid)) +
-  geom_point()
-```
-
-
-
-The model built above is compared to two other models using `crossv_mc.` 
-The two other models are as follows: 
-* One using length at birth and gestational age as predictors (main effects only)
-* One using head circumference, length, sex, and all interactions (including the three-way interaction) between these.
-
-
-```{r comparison}
 cv_df = 
   crossv_mc(birthweight_df, 100) 
 
@@ -349,13 +289,67 @@ cv_df =
     train = map(train, as_tibble),
     test = map(test, as_tibble))
 
+cv_test = 
+  cv_df |> 
+  mutate(
+    linear_mod = map(train, \(df) lm(bwt ~ bhead + blength + gaweeks + mheight + 
+                                       ppbmi + wtgain, data = df)), 
+    smooth_mod = map(train, \(df) gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + 
+                                        s(mheight) + s(ppbmi) + s(wtgain), data = df))
+  ) |>
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, rmse), 
+    rmse_smooth = map2_dbl(smooth_mod, test, rmse)
+  )
+
+cv_test |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(), 
+    names_to = "model", 
+    values_to = "rmse", 
+    names_prefix = "rmse_"
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin()
+```
+
+According to the violin plot, smooth model seems to a better option than the linear one. 
+I will finalize my model as below. 
+
+```{r}
+bwt_model_final = gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + 
+                        s(mheight) + s(ppbmi) + s(wtgain), data = birthweight_df)
+
+bwt_model_final |>
+  summary() 
+```
+
+
+Then, `add_predictions` and `add_residuals` are used to find the residuals and 
+predictions of the finalized model. These values are plotted against each other. 
+
+```{r plotting_model}
+birthweight_df |>
+  modelr::add_predictions(bwt_model_final) |>
+  modelr::add_residuals(bwt_model_final) |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point()
+```
+
+
+The model built above is compared to two other models using cross validation. 
+The two other models are as follows: 
+* One using length at birth and gestational age as predictors (main effects only)
+* One using head circumference, length, sex, and all interactions (including the three-way interaction) between these.
+
+
+```{r comparison}
 cv_res_df = 
   cv_df |>
   mutate(
-    bwt_my_model = map(train, \(df) lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
-                                         mheight + ppbmi + wtgain + 
-                                         menarche + momage + factor(mrace) + smoken,
-                                       data = df)), 
+    bwt_my_model = map(train, \(df) gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + 
+                                          s(mheight) + s(ppbmi) + s(wtgain), data = df)),
     bwt_first_model = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)), 
     bwt_second_model = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = df))
   ) |>
@@ -376,40 +370,4 @@ cv_res_df |>
   ggplot(aes(x = model, y = rmse)) +
   geom_violin()
 ```
-
-
-
-
-```{r testing_stuff}
-# testing the model 
-cv_test = 
-  cv_df |> 
-  mutate(
-    linear_mod = map(train, \(df) lm(bwt ~ bhead + blength + gaweeks + delwt + ppbmi + ppwt + wtgain, data = df)), 
-    smooth_mod = map(train, \(df) gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + s(delwt) + s(ppbmi) + s(ppwt) + s(wtgain), data = df))
-  ) |>
-  mutate(
-    rmse_linear = map2_dbl(linear_mod, test, rmse), 
-    rmse_smooth = map2_dbl(smooth_mod, test, rmse)
-  )
-
-cv_test |>
-  select(starts_with("rmse")) |>
-  pivot_longer(
-    everything(), 
-    names_to = "model", 
-    values_to = "rmse", 
-    names_prefix = "rmse_"
-  ) |>
-  ggplot(aes(x = model, y = rmse)) +
-  geom_violin()
-```
-
-
-To propose a regression model for birthweight, three different types of models--linear, smooth, and wiggly--were checked. 
-
-Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. 
-
-Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
-
 
