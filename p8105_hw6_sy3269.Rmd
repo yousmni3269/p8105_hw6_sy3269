@@ -1,19 +1,25 @@
 ---
 title: "P8105_HW6_sy3269"
 author: "Soomin You"
-date: "2024-11-17"
-output: html_document
+output: github_document
 ---
 
+Packages required for this homework, such as `tidyverse` and `readr`, are loaded. 
 
-```{r setup}
+```{r setup, include = FALSE, message = FALSE}
 library(tidyverse)
 library(readr)
+library(modelr)
+library(mgcv)
+library(glmnet)
+
+set.seed(1)
 ```
 
 
 ## Problem 1
 
+The weather data required for this problem 1 is imported. 
 
 ```{r weather_data_import}
 weather_df = 
@@ -29,21 +35,73 @@ weather_df =
   select(name, id, everything())
 ```
 
-The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response and tmin as the predictor, and are interested in the distribution of two quantities estimated from these data:
-
-Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of these two quantities. Plot the distribution of your estimates, and describe these in words. Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for 𝑟̂2 and log(𝛽̂0∗𝛽̂1). Note: broom::glance() is helpful for extracting 𝑟̂2 from a fitted regression, and broom::tidy() (with some additional wrangling) should help in computing log(𝛽̂0∗𝛽̂1).
+Using the `tmax` as the response and `tmin` as the predictor, bootstrapping is 
+performed and estimates for 𝑟̂2 and log(𝛽̂0∗𝛽̂1) for each bootstrap sample are
+determined. 
 
 ```{r}
-boot_samp = 
+boot_straps = 
+  weather_df |>
+  modelr::bootstrap(5000) |>
+  mutate(
+    strap = map(strap, as_tibble), 
+    models = map(strap, \(df) lm(tmax ~ tmin, data = df)), 
+    results_tidy = map(models, broom::tidy),
+    results_glance = map(models, broom::glance)
+  ) |>
+  select(.id, results_tidy, results_glance) |>
+  unnest(results_tidy, results_glance)
+
+boot_straps |>
+  group_by(.id, r.squared) |>
+  summarize(log_b0_b1 = log(prod(estimate)), .groups = "drop") 
+
+head(boot_straps)
+```
+
+Then, the distribution of the estimates for 5000 bootstrap sample is plotted. 
+The distribution is approximately normal, being symmetric with respect to 1.04. 
+
+```{r}
+boot_straps |>
+  filter(term == "tmin") |>
+  ggplot(aes(x = estimate)) + 
+  geom_density() +
+  labs(x = "Estimate", 
+       y = "Density", 
+       title = "Distribution of the estimates") +
+  theme_minimal()
+```
+
+Using the 5000 bootstrap estimates, the 2.5% and 97.5% quantiles to provide a 
+95% confidence interval for 𝑟̂2 and log(𝛽̂0∗𝛽̂1) are also found. 
+The confidence interval is (1.005, 1.073). 
+
+```{r}
+boot_straps |>
+  filter(term == "tmin") |> 
+  summarize(
+    lower = quantile(estimate, probs = 0.025),
+    upper = quantile(estimate, probs = 0.975) 
+  ) |>
+  knitr::kable(digits = 3)
 ```
 
 
 
 ## Problem 2 
 
-The homicides data gathered by The *Washington Post* in 50 large U.S. cities was imported and cleaned. An additional variable `city_state` was added to show both city and state information in one vector, and a binary variable called `solved` was added to show cases closed with arrest as 1 and the others (closed without arrest and open cases) as 0. 
+The homicides data gathered by The *Washington Post* in 50 large U.S. cities 
+is imported and cleaned. An additional variable `city_state` is added to show 
+both city and state information in one vector, and a binary variable called 
+`solved` is also added to show cases closed with arrest as 1 and the others 
+(closed without arrest and open cases) as 0. 
 
-Some cities that do not report victim race, such as Dallas, TX; Phoenix, AZ; and Kansas City, MO were omitted, and a data entry with incorrect information (e.g. Tulsa, AL) was also omitted. Data with unknown victim_age were also omitted for analysis. The analysis will be limited to the victims whose race is white or black. 
+Some cities that do not report victim race, such as Dallas, TX; Phoenix, AZ; 
+and Kansas City, MO are omitted, and a data entry with incorrect information 
+(e.g. Tulsa, AL) is omitted as well. Data with unknown victim_age or victim_sex 
+are also omitted for analysis. The analysis will be limited to the victims 
+whose race is white or black. 
 
 ```{r homicide_data_import}
 homicide_data = read_csv("./data/homicide-data.csv", na = c("NA", "", ".")) |>
@@ -53,12 +111,18 @@ homicide_data = read_csv("./data/homicide-data.csv", na = c("NA", "", ".")) |>
   ) |>
   filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"), 
          victim_race %in% c("White", "Black"), 
-         victim_age != "Unknown") |>
-  mutate(victim_age = as.numeric(victim_age))
+         victim_age != "Unknown", 
+         victim_sex != "Unknown") |>
+  mutate(victim_age = as.numeric(victim_age)) 
 ```
 
 
-For the city of Baltimore, MD, the glm function was used to fit a logistic regression with `solved` as the outcome and `victim_age`, `victim_sex` and `victim_race` are predictors. 
+For the city of Baltimore, MD, the `glm` function is used to fit a logistic 
+regression with `solved` as the outcome and `victim_age`, `victim_sex` and 
+`victim_race` are predictors. The output of glm function is saved, cleaned 
+using the broom::tidy, and the estimate and confidence interval of the adjusted 
+odds ratio for solving homicides comparing male victims to female victims, with 
+all the other variables fixed, are found.  
 
 ```{r baltimore_data}
 baltimore_model = 
@@ -67,16 +131,20 @@ baltimore_model =
   glm(solved ~ victim_age + victim_sex + victim_race, data = _) |>
   broom::tidy()
 
-
-or_baltimore_male = pull(estimate)
+baltimore_model |>
+  filter(term =="victim_sexMale") |>
+  mutate(
+    odds_ratio = exp(estimate), 
+    conf_int_lower = exp(estimate - 1.96 * std.error), 
+    conf_int_upper = exp(estimate + 1.96 * std.error)
+  ) |>
+  select(term, estimate, odds_ratio, conf_int_lower, conf_int_upper) |>
+  knitr::kable(digit = 3)
 ```
 
-obtain the estimate and confidence interval of the adjusted odds ratio for solving homicides comparing male victims to female victims keeping all other variables fixed.
 
-
-
-
-Now run glm for each of the cities in your dataset, and extract the adjusted odds ratio (and CI) for solving homicides comparing male victims to female victims. Do this within a “tidy” pipeline, making use of purrr::map, list columns, and unnest as necessary to create a dataframe with estimated ORs and CIs for each city.
+Then, for each of the 50 cities, the adjusted odds ratio and confidence interval 
+for solving homicides comparing male victims to female victims are calculated. 
 
 ```{r each_city_data}
 city_model = function(name) { 
@@ -89,12 +157,10 @@ city_model = function(name) {
     broom::tidy()
 }
 
-
 unique_city_state = 
   homicide_data |>
   distinct(city_state) |>
   pull(city_state)
-
 
 city_simulation = 
   tibble(
@@ -103,39 +169,247 @@ city_simulation =
   mutate(data = map(unique_name, city_model)) |>
   unnest(data) 
 
-
+city_simulation |>
+  filter(term == "victim_sexMale") |>
+  mutate(
+    odds_ratio = exp(estimate), 
+    conf_int_lower = exp(estimate - 1.96 * std.error), 
+    conf_int_upper = exp(estimate + 1.96 * std.error)
+  ) |>
+  select(unique_name, estimate, odds_ratio, conf_int_lower, conf_int_upper) |>
+  knitr::kable(digit = 3)
 ```
-
 
 
 
 ## Problem 3 
 
+The birthweight data is loaded and cleaned. Missing values are dropped and 
+some of the numeric variables are converted to factor variables. For example, 
+the race of father and mother is changed from numeric values to appropriate 
+categories. 
+
 ```{r birthweight_data_import}
-birthweight_data = read_csv("./data/birthweight.csv", na = c("NA", "", ".")) |>
-  janitor::clean_names() 
+birthweight_df = read_csv("./data/birthweight.csv", 
+                          na = c("NA", "", ".")) |>
+  janitor::clean_names() |>
+  mutate(
+    id = row_number(),
+    babysex = case_match(babysex, 
+                         1 ~ "male", 
+                         2 ~ "female"), 
+    babysex = fct_infreq(babysex), 
+    frace = case_match(frace, 
+                       1 ~ "White", 
+                       2 ~ "Black", 
+                       3 ~ "Asian", 
+                       4 ~ "Puerto Rican", 
+                       8 ~ "Other", 
+                       9 ~ "Unknown"), 
+    frace = fct_infreq(frace),
+    malform = case_match(malform, 
+                         0 ~ "absent", 
+                         1 ~ "present"), 
+    malform = fct_infreq(malform),
+    mrace = case_match(mrace, 
+                       1 ~ "White", 
+                       2 ~ "Black", 
+                       3 ~ "Asian", 
+                       4 ~ "Puerto Rican", 
+                       8 ~ "Other", 
+                       9 ~ "Unknown"), 
+     mrace = fct_infreq(mrace), 
+  )
 ```
 
+A regression model for the birthweight is first made using some of the 
+baby-specific factors and maternal factors that are explicitly related to weight. 
+The predictors are as follows: 
+* babysex
+* bhead: baby’s head circumference at birth (centimeters)
+* blength: baby’s length at birth (centimeteres)
+* gaweeks: gestational age in weeks
+* delwt: mother’s weight at delivery (pounds)
+* mheight: mother’s height (inches)
+* ppbmi: mother’s pre-pregnancy BMI
+* ppwt: mother’s pre-pregnancy weight (pounds)
+* wtgain: mother’s weight gain during pregnancy (pounds)
 
 
-Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
+```{r model}
+bwt_model_fit = 
+  lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
+       delwt + mheight + ppbmi + ppwt + wtgain, 
+     data = birthweight_df) 
+
+bwt_model_fit |>
+  summary() 
+
+par(mfrow = c(2, 2))
+plot(bwt_model_fit)
+
+alias(bwt_model_fit)
+```
+
+According to the model summary, the adjusted R-squared value is only 0.70. And 
+according to the QQ plot, there are few outliers that hinder almost linear 
+relationship. Hence, alias function was used to check the multilinearity and 
+it was found that `delwt`, `ppwt` and `wtgain` are correlated. 
+
+To improve this model, `delwt`, `ppwt` will be removed and only `wtgain` will 
+used as a predictor. 
+
+```{r}
+bwt_model_new = 
+  lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
+       mheight + ppbmi + wtgain, 
+     data = birthweight_df) 
+
+bwt_model_new |>
+  summary() 
+
+alias(bwt_model_new)
+car::vif(bwt_model_new)
+plot(bwt_model_new)
+```
+
+Adjusting the predictors did not improve the adjusted R-squared value but 
+successfully removed the alias. VIF was also checked and with no outstanding 
+number, there seems to be no multicolinearity issue. However, residual vs leverage
+plot is worth noting as it indicates an influential point on the right upper corner. 
+
+
+To further improve the model, additional predictors that are mainly maternal
+will be added. The additional predictors are listed below. 
+* menarche: mother’s age at menarche (years)
+* momage: mother’s age at delivery (years)
+* mrace: mother's race 
+* smoken: average number of cigarettes smoked per day during pregnancy
 
 
 ```{r}
-birthweight_data |>
-  lm(bwt ~ wtgain + delwt, data = _)
+bwt_model_add = 
+  lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
+       mheight + ppbmi + wtgain + 
+       menarche + momage + factor(mrace) + smoken,
+     data = birthweight_df) 
+
+bwt_model_add |>
+  summary() 
+
+alias(bwt_model_add)
+plot(bwt_model_add)
 ```
 
-Compare your model to two others:
+The adjusted R squared value is slightly improved to 0.72. There is no alias 
+and the plot seems to be indicate more ideal linear relationship than the 
+previous model. 
 
-One using length at birth and gestational age as predictors (main effects only)
-One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
-Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
-
-Note that although we expect your model to be reasonable, model building itself is not a main idea of the course and we don’t necessarily expect your model to be “optimal”.
+To finalize the model, 
 
 
+The `bwt_model_add` is then plotted to see 
+
+```{r}
+birthweight_df |>
+  ggplot(aes(x = bhead + blength + gaweeks + 
+       mheight + ppbmi + wtgain + 
+       menarche + momage +smoken, 
+       y = bwt)) +
+  geom_point()
+```
 
 
+Then, `add_predictions` and `add_residuals` are used to find the residuals and 
+predictions of the finalized model. These values are plotted against each other. 
+
+```{r plotting_model}
+birthweight_df |>
+  modelr::add_predictions(bwt_model_add) |>
+  modelr::add_residuals(bwt_model_add) |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point()
+```
+
+
+
+The model built above is compared to two other models using `crossv_mc.` 
+The two other models are as follows: 
+* One using length at birth and gestational age as predictors (main effects only)
+* One using head circumference, length, sex, and all interactions (including the three-way interaction) between these.
+
+
+```{r comparison}
+cv_df = 
+  crossv_mc(birthweight_df, 100) 
+
+cv_df =
+  cv_df |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_res_df = 
+  cv_df |>
+  mutate(
+    bwt_my_model = map(train, \(df) lm(bwt ~ factor(babysex) + bhead + blength + gaweeks + 
+                                         mheight + ppbmi + wtgain + 
+                                         menarche + momage + factor(mrace) + smoken,
+                                       data = df)), 
+    bwt_first_model = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)), 
+    bwt_second_model = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = df))
+  ) |>
+  mutate(
+    rmse_bwt_my = map2_dbl(bwt_my_model, test, rmse), 
+    rmse_bwt_first = map2_dbl(bwt_first_model, test, rmse), 
+    rmse_bwt_second = map2_dbl(bwt_second_model, test, rmse)
+  )
+
+cv_res_df |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(), 
+    names_to = "model", 
+    values_to = "rmse", 
+    names_prefix = "rmse_"
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin()
+```
+
+
+
+
+```{r testing_stuff}
+# testing the model 
+cv_test = 
+  cv_df |> 
+  mutate(
+    linear_mod = map(train, \(df) lm(bwt ~ bhead + blength + gaweeks + delwt + ppbmi + ppwt + wtgain, data = df)), 
+    smooth_mod = map(train, \(df) gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + s(delwt) + s(ppbmi) + s(ppwt) + s(wtgain), data = df))
+  ) |>
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, rmse), 
+    rmse_smooth = map2_dbl(smooth_mod, test, rmse)
+  )
+
+cv_test |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(), 
+    names_to = "model", 
+    values_to = "rmse", 
+    names_prefix = "rmse_"
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin()
+```
+
+
+To propose a regression model for birthweight, three different types of models--linear, smooth, and wiggly--were checked. 
+
+Propose a regression model for birthweight. This model may be based on a hypothesized structure for the factors that underly birthweight, on a data-driven model-building process, or a combination of the two. 
+
+Describe your modeling process and show a plot of model residuals against fitted values – use add_predictions and add_residuals in making this plot.
 
 
