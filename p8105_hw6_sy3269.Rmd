@@ -13,7 +13,7 @@ library(modelr)
 library(mgcv)
 library(glmnet)
 
-set.seed(1)
+set.seed(10)
 ```
 
 
@@ -190,8 +190,8 @@ the race of father and mother is changed from numeric values to appropriate
 categories. 
 
 ```{r birthweight_data_import}
-birthweight_df = read_csv("./data/birthweight.csv", 
-                          na = c("NA", "", ".")) |>
+birthweight_df = 
+  read_csv("./data/birthweight.csv", na = c("NA", "", ".")) |>
   janitor::clean_names() |>
   mutate(
     id = row_number(),
@@ -222,9 +222,10 @@ birthweight_df = read_csv("./data/birthweight.csv",
   )
 ```
 
-A regression model for the birthweight is first made using some of the 
-baby-specific factors and maternal factors that are explicitly related to weight. 
-The predictors are as follows: 
+To build a regression model for birthweight of this dataset, I will first look 
+at some of the factors that seem directly related to the weight of mother and 
+some factors that are baby specific. The predictors are as follows: 
+
 * bhead: baby’s head circumference at birth (centimeters)
 * blength: baby’s length at birth (centimeteres)
 * gaweeks: gestational age in weeks
@@ -240,8 +241,7 @@ bwt_model_fit =
   lm(bwt ~  bhead + blength + gaweeks + delwt + mheight + ppbmi + ppwt + wtgain, 
      data = birthweight_df) 
 
-bwt_model_fit |>
-  summary() 
+summary(bwt_model_fit)
 
 par(mfrow = c(2, 2))
 plot(bwt_model_fit)
@@ -249,37 +249,75 @@ plot(bwt_model_fit)
 alias(bwt_model_fit)
 ```
 
-According to the model summary, the adjusted R-squared value is only 0.70. And 
-according to the QQ plot, there are few outliers that hinder almost linear 
-relationship. Hence, alias function was used to check the multilinearity and 
-it was found that `delwt`, `ppwt` and `wtgain` are correlated. 
+According to the model summary, the adjusted R-squared value is only 0.70. 
+And according to the QQ plot, there are few outliers that hinder almost linear 
+relationship. Hence, alias function was used to check multilinearity. 
+It was found that `delwt`, `ppwt` and `wtgain` are correlated. 
 
 To improve this model, `delwt`, `ppwt` will be removed and only `wtgain` will 
-used as a predictor. 
+be used as a predictor. 
 
 ```{r}
 bwt_model_new = 
   lm(bwt ~ bhead + blength + gaweeks + mheight + ppbmi + wtgain, 
      data = birthweight_df) 
 
-bwt_model_new |>
-  summary() 
+summary(bwt_model_new)
 
 alias(bwt_model_new)
 car::vif(bwt_model_new)
+
+par(mfrow = c(2, 2))
 plot(bwt_model_new)
 ```
 
 Adjusting the predictors did not improve the adjusted R-squared value but 
-successfully removed the alias. VIF was also checked and with no outstanding 
-number, there seems to be no multicolinearity issue. However, residual vs leverage
+successfully removed the alias. VIF was also checked and without any outstanding 
+number, there seems to be no multicollinearity issue. However, residual vs leverage
 plot is worth noting as it indicates an influential point on the right upper corner. 
 
 
-To further improve the model, cross validation is performed. 
-The linear model above is compared with a smooth model. 
+To further refine the model, a possible interaction was checked. 
 
 ```{r}
+bwt_model_int = 
+  lm(bwt ~ bhead * blength * gaweeks * mheight * ppbmi * wtgain, 
+     data = birthweight_df) 
+
+summary(bwt_model_int)
+
+alias(bwt_model_int)
+
+par(mfrow = c(2, 2))
+plot(bwt_model_int)
+```
+
+According to this model, the adjusted R sqaured value was slightly higher 
+than the previous model. Some significant interaction was checked, but no
+multilinearity was found. 
+
+I will use this model to calculate estimated predictions and residuals. 
+
+Once the predictions and residuals are found using `add_predictions` and `add_residuals` functions, these values are plotted against each other. 
+
+```{r plotting_model}
+birthweight_df |>
+  modelr::add_predictions(bwt_model_int) |>
+  modelr::add_residuals(bwt_model_int) |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point()
+```
+
+
+The model built above is compared to two other models using cross validation. 
+The two other models are as follows: 
+
+1) One using length at birth and gestational age as predictors (main effects only)
+
+2) One using head circumference, length, sex, and all interactions (including the three-way interaction) between these.
+
+
+```{r comparison}
 cv_df = 
   crossv_mc(birthweight_df, 100) 
 
@@ -289,67 +327,11 @@ cv_df =
     train = map(train, as_tibble),
     test = map(test, as_tibble))
 
-cv_test = 
-  cv_df |> 
-  mutate(
-    linear_mod = map(train, \(df) lm(bwt ~ bhead + blength + gaweeks + mheight + 
-                                       ppbmi + wtgain, data = df)), 
-    smooth_mod = map(train, \(df) gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + 
-                                        s(mheight) + s(ppbmi) + s(wtgain), data = df))
-  ) |>
-  mutate(
-    rmse_linear = map2_dbl(linear_mod, test, rmse), 
-    rmse_smooth = map2_dbl(smooth_mod, test, rmse)
-  )
-
-cv_test |>
-  select(starts_with("rmse")) |>
-  pivot_longer(
-    everything(), 
-    names_to = "model", 
-    values_to = "rmse", 
-    names_prefix = "rmse_"
-  ) |>
-  ggplot(aes(x = model, y = rmse)) +
-  geom_violin()
-```
-
-According to the violin plot, smooth model seems to a better option than the linear one. 
-I will finalize my model as below. 
-
-```{r}
-bwt_model_final = gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + 
-                        s(mheight) + s(ppbmi) + s(wtgain), data = birthweight_df)
-
-bwt_model_final |>
-  summary() 
-```
-
-
-Then, `add_predictions` and `add_residuals` are used to find the residuals and 
-predictions of the finalized model. These values are plotted against each other. 
-
-```{r plotting_model}
-birthweight_df |>
-  modelr::add_predictions(bwt_model_final) |>
-  modelr::add_residuals(bwt_model_final) |>
-  ggplot(aes(x = pred, y = resid)) +
-  geom_point()
-```
-
-
-The model built above is compared to two other models using cross validation. 
-The two other models are as follows: 
-* One using length at birth and gestational age as predictors (main effects only)
-* One using head circumference, length, sex, and all interactions (including the three-way interaction) between these.
-
-
-```{r comparison}
 cv_res_df = 
   cv_df |>
   mutate(
-    bwt_my_model = map(train, \(df) gam(bwt ~ s(bhead) + s(blength) + s(gaweeks) + 
-                                          s(mheight) + s(ppbmi) + s(wtgain), data = df)),
+    bwt_my_model = map(train, \(df) lm(bwt ~ bhead * blength * gaweeks * mheight * 
+                                         ppbmi * wtgain, data = df)),
     bwt_first_model = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)), 
     bwt_second_model = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = df))
   ) |>
@@ -360,7 +342,7 @@ cv_res_df =
   )
 
 cv_res_df |>
-  select(starts_with("rmse")) |>
+  dplyr::select(starts_with("rmse")) |>
   pivot_longer(
     everything(), 
     names_to = "model", 
