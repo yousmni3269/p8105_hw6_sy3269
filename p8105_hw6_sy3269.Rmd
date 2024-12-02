@@ -128,7 +128,7 @@ all the other variables fixed, are found.
 baltimore_model = 
   homicide_data |>
   filter(city_state == "Baltimore, MD") |>
-  glm(solved ~ victim_age + victim_sex + victim_race, data = _) |>
+  glm(solved ~ victim_age + victim_sex + victim_race, family = binomial(), data = _) |>
   broom::tidy()
 
 baltimore_model |>
@@ -153,7 +153,7 @@ city_model = function(name) {
     homicide_data |>
     filter(city_state == name) 
     
-  glm(solved ~ victim_age + victim_sex + victim_race, data = city_data) |>
+  glm(solved ~ victim_age + victim_sex + victim_race, family = binomial(), data = city_data) |>
     broom::tidy()
 }
 
