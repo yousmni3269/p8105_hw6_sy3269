@@ -74,8 +74,7 @@ boot_straps |>
 ```
 
 Using the 5000 bootstrap estimates, the 2.5% and 97.5% quantiles to provide a 
-95% confidence interval for 𝑟̂2 and log(𝛽̂0∗𝛽̂1) are also found. 
-The confidence interval is (1.005, 1.073). 
+95% confidence interval for 𝑟̂2 and log(𝛽̂0∗𝛽̂1) are also found as below.
 
 ```{r}
 boot_straps |>
